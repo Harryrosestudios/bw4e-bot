@@ -92,40 +92,7 @@ func registerCommands(s *discordgo.Session) {
 		log.Fatalf("Cannot register commands: Discord session state is not initialized.")
 	}
 
-	commands := []*discordgo.ApplicationCommand{
-		{
-			Name:        "hide",
-			Description: "Hides a specified channel for you.",
-			Options: []*discordgo.ApplicationCommandOption{
-				{
-					Type:        discordgo.ApplicationCommandOptionChannel,
-					Name:        "channel",
-					Description: "The channel to hide",
-					Required:    true,
-				},
-			},
-		},
-		{
-			Name:        "unhide",
-			Description: "Unhides a specified channel for you.",
-			Options: []*discordgo.ApplicationCommandOption{
-				{
-					Type:        discordgo.ApplicationCommandOptionChannel,
-					Name:        "channel",
-					Description: "The channel to unhide",
-					Required:    true,
-				},
-			},
-		},
-	}
-
-	for _, cmd := range commands {
-        if _, err := s.ApplicationCommandCreate(s.State.User.ID, config.GuildID, cmd); err != nil {
-            log.Printf("Error registering command '%s': %v", cmd.Name, err)
-            continue
-        }
-        log.Printf("Registered command '%s' successfully.", cmd.Name)
-    }
+	// No commands to register after removing /hide and /unhide
 }
 
 // Fetch emails from Google Sheets
@@ -232,38 +199,5 @@ func onMessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 
 // Handle interactions for slash commands
 func onInteractionCreate(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	if i.Type != discordgo.InteractionApplicationCommand {
-        return
-    }
-
-	commandName := i.ApplicationCommandData().Name
-	options := i.ApplicationCommandData().Options
-
-	switch commandName {
-	case "hide":
-        channelID := options[0].ChannelValue(nil).ID
-        _ = s.ChannelPermissionSet(channelID, i.Member.User.ID, discordgo.PermissionOverwriteTypeMember, 0, discordgo.PermissionViewChannel)
-        _ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-            Type: discordgo.InteractionResponseChannelMessageWithSource,
-            Data: &discordgo.InteractionResponseData{
-                Content: fmt.Sprintf("You can no longer see <#%s>.", channelID),
-            },
-        })
-	case "unhide":
-        channelID := options[0].ChannelValue(nil).ID
-        _ = s.ChannelPermissionSet(channelID, i.Member.User.ID, discordgo.PermissionOverwriteTypeMember, discordgo.PermissionViewChannel, 0)
-        _ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-            Type: discordgo.InteractionResponseChannelMessageWithSource,
-            Data: &discordgo.InteractionResponseData{
-                Content: fmt.Sprintf("You can now see <#%s>.", channelID),
-            },
-        })
-	default:
-        _ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-            Type: discordgo.InteractionResponseChannelMessageWithSource,
-            Data: &discordgo.InteractionResponseData{
-                Content: "Unknown command.",
-            },
-        })
-    }
+    // Intentionally left blank: ignore all slash commands
 }

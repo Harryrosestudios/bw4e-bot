@@ -69,7 +69,7 @@ func savePartners() error {
 	return os.WriteFile(partnersFile, b, 0644)
 }
 
-// NEW: Check for existing bot embed in the channel
+// Check for existing bot embed in the channel
 func hasBotEmbedInChannel(s *discordgo.Session, channelID, botUserID string) (bool, error) {
 	messages, err := s.ChannelMessages(channelID, 50, "", "", "")
 	if err != nil {
@@ -120,6 +120,66 @@ func sendPartnersEmbed(s *discordgo.Session) {
 	})
 	if err != nil {
 		log.Printf("Error sending partners embed: %v", err)
+	}
+}
+
+// Update the partners embed/buttons in-place
+func updatePartnersEmbed(s *discordgo.Session, botUserID string) {
+	messages, err := s.ChannelMessages(partnersChannelID, 50, "", "", "")
+	if err != nil {
+		log.Printf("Error fetching messages for update: %v", err)
+		return
+	}
+	var botMsg *discordgo.Message
+	for _, msg := range messages {
+		if msg.Author != nil && msg.Author.ID == botUserID && len(msg.Embeds) > 0 {
+			botMsg = msg
+			break
+		}
+	}
+	if botMsg == nil {
+		// No existing embed, just send a new one
+		sendPartnersEmbed(s)
+		return
+	}
+
+	// Build new embed and buttons
+	botUser, _ := s.User("@me")
+	var avatarURL string
+	if botUser.Avatar != "" {
+		avatarURL = discordgo.EndpointUserAvatar(botUser.ID, botUser.Avatar)
+	}
+	embed := &discordgo.MessageEmbed{
+		Title:       "Partners",
+		Description: "Click the below reactions to learn more about our partners, see what offerings they have for you, and how you can access their platform with us.",
+	}
+	if avatarURL != "" {
+		embed.Thumbnail = &discordgo.MessageEmbedThumbnail{URL: avatarURL}
+	}
+	var buttons []discordgo.MessageComponent
+	for _, p := range partners {
+		buttons = append(buttons, discordgo.Button{
+			Label:    p.Name,
+			Emoji:    &discordgo.ComponentEmoji{Name: p.Emoji},
+			CustomID: "partner_" + p.Name,
+			Style:    discordgo.PrimaryButton,
+		})
+	}
+
+	edit := &discordgo.MessageEdit{
+		ID:      botMsg.ID,
+		Channel: partnersChannelID,
+		Embeds:  &[]*discordgo.MessageEmbed{embed},
+	}
+	if len(buttons) > 0 {
+		edit.Components = &[]discordgo.MessageComponent{
+			discordgo.ActionsRow{Components: buttons},
+		}
+	}
+
+	_, err = s.ChannelMessageEditComplex(edit)
+	if err != nil {
+		log.Printf("Error editing partners embed: %v", err)
 	}
 }
 
@@ -218,6 +278,13 @@ func registerCommands(s *discordgo.Session) {
 				{Type: discordgo.ApplicationCommandOptionString, Name: "logo",        Description: "Logo URL",     Required: true},
 				{Type: discordgo.ApplicationCommandOptionString, Name: "link",        Description: "Offering Link",Required: true},
 				{Type: discordgo.ApplicationCommandOptionString, Name: "emoji",       Description: "Emoji",        Required: true},
+			},
+		},
+		{
+			Name:        "delpartner",
+			Description: "Delete a partner by name.",
+			Options: []*discordgo.ApplicationCommandOption{
+				{Type: discordgo.ApplicationCommandOptionString, Name: "name", Description: "Partner Name", Required: true},
 			},
 		},
 	}
@@ -377,6 +444,63 @@ func onInteractionCreate(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		})
 		// Optionally, update the partners embed after adding
 		// sendPartnersEmbed(s)
+		return
+	}
+
+	// Handle delpartner slash command
+	if i.Type == discordgo.InteractionApplicationCommand && i.ApplicationCommandData().Name == "delpartner" {
+		// Only allow users with the addPartnerRoleID
+		hasRole := false
+		for _, r := range i.Member.Roles {
+			if r == addPartnerRoleID {
+				hasRole = true
+				break
+			}
+		}
+		if !hasRole {
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: "You do not have permission to use this command.",
+					Flags:   discordgo.MessageFlagsEphemeral,
+				},
+			})
+			return
+		}
+
+		partnerName := i.ApplicationCommandData().Options[0].StringValue()
+		// Delete partner from slice
+		found := false
+		for idx, p := range partners {
+			if strings.EqualFold(p.Name, partnerName) {
+				partners = append(partners[:idx], partners[idx+1:]...)
+				found = true
+				break
+			}
+		}
+		if !found {
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: "Partner not found.",
+					Flags:   discordgo.MessageFlagsEphemeral,
+				},
+			})
+			return
+		}
+		if err := savePartners(); err != nil {
+			log.Printf("Error saving partners: %v", err)
+		}
+		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: "Partner deleted and embed updated.",
+				Flags:   discordgo.MessageFlagsEphemeral,
+			},
+		})
+		// Update the embed/buttons
+		botUser, _ := s.User("@me")
+		updatePartnersEmbed(s, botUser.ID)
 		return
 	}
 

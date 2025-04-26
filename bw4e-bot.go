@@ -402,7 +402,6 @@ func onMessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 
 // Handle interactions for slash commands and partner buttons
 func onInteractionCreate(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	// Handle addpartner slash command
 	if i.Type == discordgo.InteractionApplicationCommand && i.ApplicationCommandData().Name == "addpartner" {
 		// Role restriction
 		hasRole := false
@@ -423,8 +422,24 @@ func onInteractionCreate(s *discordgo.Session, i *discordgo.InteractionCreate) {
 			return
 		}
 		opts := i.ApplicationCommandData().Options
+		newName := strings.TrimSpace(opts[0].StringValue())
+	
+		// Check for duplicate partner name (case-insensitive)
+		for _, p := range partners {
+			if strings.EqualFold(strings.TrimSpace(p.Name), newName) {
+				s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+					Type: discordgo.InteractionResponseChannelMessageWithSource,
+					Data: &discordgo.InteractionResponseData{
+						Content: "A partner with that name already exists. Please choose a unique name.",
+						Flags:   discordgo.MessageFlagsEphemeral,
+					},
+				})
+				return
+			}
+		}
+	
 		p := Partner{
-			Name:        opts[0].StringValue(),
+			Name:        newName,
 			Description: opts[1].StringValue(),
 			Offering:    opts[2].StringValue(),
 			LogoURL:     opts[3].StringValue(),
@@ -442,67 +457,93 @@ func onInteractionCreate(s *discordgo.Session, i *discordgo.InteractionCreate) {
 				Flags:   discordgo.MessageFlagsEphemeral,
 			},
 		})
-		// Optionally, update the partners embed after adding
-		// sendPartnersEmbed(s)
-		return
-	}
 
-	// Handle delpartner slash command
-	if i.Type == discordgo.InteractionApplicationCommand && i.ApplicationCommandData().Name == "delpartner" {
-		// Only allow users with the addPartnerRoleID
-		hasRole := false
-		for _, r := range i.Member.Roles {
-			if r == addPartnerRoleID {
-				hasRole = true
-				break
-			}
-		}
-		if !hasRole {
-			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{
-					Content: "You do not have permission to use this command.",
-					Flags:   discordgo.MessageFlagsEphemeral,
-				},
-			})
-			return
-		}
-
-		partnerName := i.ApplicationCommandData().Options[0].StringValue()
-		// Delete partner from slice
-		found := false
-		for idx, p := range partners {
-			if strings.EqualFold(p.Name, partnerName) {
-				partners = append(partners[:idx], partners[idx+1:]...)
-				found = true
-				break
-			}
-		}
-		if !found {
-			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{
-					Content: "Partner not found.",
-					Flags:   discordgo.MessageFlagsEphemeral,
-				},
-			})
-			return
-		}
-		if err := savePartners(); err != nil {
-			log.Printf("Error saving partners: %v", err)
-		}
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: "Partner deleted and embed updated.",
-				Flags:   discordgo.MessageFlagsEphemeral,
-			},
-		})
-		// Update the embed/buttons
 		botUser, _ := s.User("@me")
+
+		// --- NEW: Delete "No partners configured yet." message if present
+		messages, err := s.ChannelMessages(partnersChannelID, 50, "", "", "")
+		if err == nil {
+			for _, msg := range messages {
+				if msg.Author != nil && msg.Author.ID == botUser.ID && msg.Content == "No partners configured yet." {
+					_ = s.ChannelMessageDelete(partnersChannelID, msg.ID)
+					break
+				}
+			}
+		}
+		// ---
+
 		updatePartnersEmbed(s, botUser.ID)
 		return
 	}
+
+// Handle delpartner slash command
+if i.Type == discordgo.InteractionApplicationCommand && i.ApplicationCommandData().Name == "delpartner" {
+	// Only allow users with the addPartnerRoleID
+	hasRole := false
+	for _, r := range i.Member.Roles {
+		if r == addPartnerRoleID {
+			hasRole = true
+			break
+		}
+	}
+	if !hasRole {
+		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: "You do not have permission to use this command.",
+				Flags:   discordgo.MessageFlagsEphemeral,
+			},
+		})
+		return
+	}
+
+	partnerName := strings.TrimSpace(i.ApplicationCommandData().Options[0].StringValue())
+	found := false
+	for idx, p := range partners {
+		if strings.EqualFold(strings.TrimSpace(p.Name), partnerName) {
+			partners = append(partners[:idx], partners[idx+1:]...)
+			found = true
+			break
+		}
+	}
+	if !found {
+		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: "Partner not found.",
+				Flags:   discordgo.MessageFlagsEphemeral,
+			},
+		})
+		return
+	}
+	if err := savePartners(); err != nil {
+		log.Printf("Error saving partners: %v", err)
+	}
+
+	// Delete the old embed message
+	botUser, _ := s.User("@me")
+	messages, err := s.ChannelMessages(partnersChannelID, 50, "", "", "")
+	if err == nil {
+		for _, msg := range messages {
+			if msg.Author != nil && msg.Author.ID == botUser.ID && len(msg.Embeds) > 0 {
+				_ = s.ChannelMessageDelete(partnersChannelID, msg.ID)
+				break
+			}
+		}
+	}
+
+	// Send the new embed
+	sendPartnersEmbed(s)
+
+	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Content: "Partner deleted and embed refreshed.",
+			Flags:   discordgo.MessageFlagsEphemeral,
+		},
+	})
+	return
+}
 
 	// Handle partner button presses
 	if i.Type == discordgo.InteractionMessageComponent && strings.HasPrefix(i.MessageComponentData().CustomID, "partner_") {

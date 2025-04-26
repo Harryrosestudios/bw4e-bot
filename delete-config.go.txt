@@ -1,0 +1,29 @@
+package main
+
+import (
+    "encoding/json"
+    "log"
+    "os"
+)
+
+type Configuration struct {
+    DiscordToken    string `json:"discord_token"`
+    SpreadsheetID  string `json:"spreadsheet_id"`
+    CredentialsPath string `json:"credentials_path"`
+}
+
+var Config Configuration
+
+func LoadConfig(configPath string) {
+    file, err := os.Open(configPath)
+    if err != nil {
+        log.Fatalf("Error opening config file: %v", err)
+    }
+    defer file.Close()
+
+    decoder := json.NewDecoder(file)
+    err = decoder.Decode(&Config)
+    if err != nil {
+        log.Fatalf("Error decoding config file: %v", err)
+    }
+}

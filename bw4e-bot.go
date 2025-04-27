@@ -15,6 +15,11 @@ import (
 	"google.golang.org/api/sheets/v4"
 )
 
+// Helper for *int values in struct literals
+func intPtr(i int) *int {
+	return &i
+}
+
 // Config structure to hold configuration data
 type Config struct {
 	BotToken        string `json:"discordToken"`
@@ -44,10 +49,84 @@ var partners []Partner
 const partnersFile = "partners.json"
 
 const (
-	partnersChannelID   = "1365774652986626109"
-	accessRoleID        = "1311141977558876201"
-	addPartnerRoleID    = "1311142224716890145"
+	partnersChannelID      = "1365774652986626109"
+	accessRoleID           = "1311141977558876201"
+	addPartnerRoleID       = "1311142224716890145"
+	notificationsChannelID = "1366043181925273731"
 )
+
+// --- Notification Feature Section ---
+
+type NotificationChannel struct {
+	Name               string `json:"name"`
+	ChannelID          string `json:"channel_id"`
+	AccessRoleID       string `json:"access_role_id"`
+	NotificationRoleID string `json:"notification_role_id"`
+}
+
+var notificationChannels []NotificationChannel
+const notificationChannelsFile = "notification_channels.json"
+
+func loadNotificationChannels() error {
+	b, err := os.ReadFile(notificationChannelsFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			notificationChannels = []NotificationChannel{}
+			return nil
+		}
+		return err
+	}
+	return json.Unmarshal(b, &notificationChannels)
+}
+
+func saveNotificationChannels() error {
+	b, err := json.MarshalIndent(notificationChannels, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(notificationChannelsFile, b, 0644)
+}
+
+func parseID(input string) string {
+	// Handles <#channel>, <@&role>, <@role>, or raw IDs
+	return strings.Trim(input, "<#@&!>")
+}
+
+func sendNotificationsEmbed(s *discordgo.Session) {
+	embed := &discordgo.MessageEmbed{
+		Title:       "Notifications",
+		Description: "Use the reaction buttons below to gain access to our notification channels.",
+	}
+	var buttons []discordgo.MessageComponent
+	for _, nc := range notificationChannels {
+		buttons = append(buttons, discordgo.Button{
+			Label:    nc.Name,
+			CustomID: "notification_" + nc.Name,
+			Style:    discordgo.PrimaryButton,
+		})
+	}
+	if len(buttons) == 0 {
+		s.ChannelMessageSend(notificationsChannelID, "No notification channels configured yet.")
+		return
+	}
+	s.ChannelMessageSendComplex(notificationsChannelID, &discordgo.MessageSend{
+		Embed:      embed,
+		Components: []discordgo.MessageComponent{discordgo.ActionsRow{Components: buttons}},
+	})
+}
+
+// --- Emoji Parsing Helper ---
+var customEmojiPattern = regexp.MustCompile(`<a?:(\w+):(\d+)>`)
+
+func parseEmoji(input string) (name, id string, animated bool) {
+	matches := customEmojiPattern.FindStringSubmatch(input)
+	if len(matches) == 3 {
+		animated := strings.HasPrefix(input, "<a:")
+		return matches[1], matches[2], animated
+	}
+	// fallback: handle Unicode emoji
+	return input, "", false
+}
 
 func loadPartners() error {
 	b, err := os.ReadFile(partnersFile)
@@ -101,9 +180,10 @@ func sendPartnersEmbed(s *discordgo.Session) {
 
 	var buttons []discordgo.MessageComponent
 	for _, p := range partners {
+		name, id, animated := parseEmoji(p.Emoji)
 		buttons = append(buttons, discordgo.Button{
 			Label:    p.Name,
-			Emoji:    &discordgo.ComponentEmoji{Name: p.Emoji},
+			Emoji:    &discordgo.ComponentEmoji{Name: name, ID: id, Animated: animated},
 			CustomID: "partner_" + p.Name,
 			Style:    discordgo.PrimaryButton,
 		})
@@ -158,9 +238,10 @@ func updatePartnersEmbed(s *discordgo.Session, botUserID string) {
 	}
 	var buttons []discordgo.MessageComponent
 	for _, p := range partners {
+		name, id, animated := parseEmoji(p.Emoji)
 		buttons = append(buttons, discordgo.Button{
 			Label:    p.Name,
-			Emoji:    &discordgo.ComponentEmoji{Name: p.Emoji},
+			Emoji:    &discordgo.ComponentEmoji{Name: name, ID: id, Animated: animated},
 			CustomID: "partner_" + p.Name,
 			Style:    discordgo.PrimaryButton,
 		})
@@ -216,6 +297,10 @@ func main() {
 	if err := loadPartners(); err != nil {
 		log.Fatalf("Error loading partners: %v", err)
 	}
+	// Load notification channels from file
+	if err := loadNotificationChannels(); err != nil {
+		log.Fatalf("Error loading notification channels: %v", err)
+	}
 
 	log.Println("Creating Discord session...")
 	dg, err := discordgo.New("Bot " + config.BotToken)
@@ -249,6 +334,14 @@ func main() {
 	}
 	if !found {
 		sendPartnersEmbed(dg)
+	}
+	// --- Only send notifications embed if not already present ---
+	foundNotif, err := hasBotEmbedInChannel(dg, notificationsChannelID, botUser.ID)
+	if err != nil {
+		log.Printf("Error checking for existing notifications embed: %v", err)
+	}
+	if !foundNotif {
+		sendNotificationsEmbed(dg)
 	}
 	// ------------------------------------------------
 
@@ -285,6 +378,23 @@ func registerCommands(s *discordgo.Session) {
 			Description: "Delete a partner by name.",
 			Options: []*discordgo.ApplicationCommandOption{
 				{Type: discordgo.ApplicationCommandOptionString, Name: "name", Description: "Partner Name", Required: true},
+			},
+		},
+		{
+			Name:        "addnotificationchannel",
+			Description: "Add a notification channel.",
+			Options: []*discordgo.ApplicationCommandOption{
+				{Type: discordgo.ApplicationCommandOptionString, Name: "name", Description: "Channel Name", Required: true},
+				{Type: discordgo.ApplicationCommandOptionString, Name: "channel", Description: "Channel (# or ID)", Required: true},
+				{Type: discordgo.ApplicationCommandOptionString, Name: "role", Description: "Access Role (@ or ID)", Required: true},
+				{Type: discordgo.ApplicationCommandOptionString, Name: "notificationrole", Description: "Notification Role (@ or ID)", Required: true},
+			},
+		},
+		{
+			Name:        "delnotificationchannel",
+			Description: "Delete a notification channel by name.",
+			Options: []*discordgo.ApplicationCommandOption{
+				{Type: discordgo.ApplicationCommandOptionString, Name: "name", Description: "Channel Name", Required: true},
 			},
 		},
 	}
@@ -400,10 +510,13 @@ func onMessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
     }
 }
 
-// Handle interactions for slash commands and partner buttons
+// Handle interactions for slash commands and partner/notification buttons
 func onInteractionCreate(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	// --- Partner commands (unchanged) ---
 	if i.Type == discordgo.InteractionApplicationCommand && i.ApplicationCommandData().Name == "addpartner" {
-		// Role restriction
+		// ... (existing addpartner code) ...
+		opts := i.ApplicationCommandData().Options
+		newName := strings.TrimSpace(opts[0].StringValue())
 		hasRole := false
 		for _, r := range i.Member.Roles {
 			if r == addPartnerRoleID {
@@ -421,10 +534,6 @@ func onInteractionCreate(s *discordgo.Session, i *discordgo.InteractionCreate) {
 			})
 			return
 		}
-		opts := i.ApplicationCommandData().Options
-		newName := strings.TrimSpace(opts[0].StringValue())
-	
-		// Check for duplicate partner name (case-insensitive)
 		for _, p := range partners {
 			if strings.EqualFold(strings.TrimSpace(p.Name), newName) {
 				s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
@@ -437,7 +546,6 @@ func onInteractionCreate(s *discordgo.Session, i *discordgo.InteractionCreate) {
 				return
 			}
 		}
-	
 		p := Partner{
 			Name:        newName,
 			Description: opts[1].StringValue(),
@@ -457,10 +565,7 @@ func onInteractionCreate(s *discordgo.Session, i *discordgo.InteractionCreate) {
 				Flags:   discordgo.MessageFlagsEphemeral,
 			},
 		})
-
 		botUser, _ := s.User("@me")
-
-		// --- NEW: Delete "No partners configured yet." message if present
 		messages, err := s.ChannelMessages(partnersChannelID, 50, "", "", "")
 		if err == nil {
 			for _, msg := range messages {
@@ -470,82 +575,271 @@ func onInteractionCreate(s *discordgo.Session, i *discordgo.InteractionCreate) {
 				}
 			}
 		}
-		// ---
-
 		updatePartnersEmbed(s, botUser.ID)
 		return
 	}
-
-// Handle delpartner slash command
-if i.Type == discordgo.InteractionApplicationCommand && i.ApplicationCommandData().Name == "delpartner" {
-	// Only allow users with the addPartnerRoleID
-	hasRole := false
-	for _, r := range i.Member.Roles {
-		if r == addPartnerRoleID {
-			hasRole = true
-			break
-		}
-	}
-	if !hasRole {
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: "You do not have permission to use this command.",
-				Flags:   discordgo.MessageFlagsEphemeral,
-			},
-		})
-		return
-	}
-
-	partnerName := strings.TrimSpace(i.ApplicationCommandData().Options[0].StringValue())
-	found := false
-	for idx, p := range partners {
-		if strings.EqualFold(strings.TrimSpace(p.Name), partnerName) {
-			partners = append(partners[:idx], partners[idx+1:]...)
-			found = true
-			break
-		}
-	}
-	if !found {
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: "Partner not found.",
-				Flags:   discordgo.MessageFlagsEphemeral,
-			},
-		})
-		return
-	}
-	if err := savePartners(); err != nil {
-		log.Printf("Error saving partners: %v", err)
-	}
-
-	// Delete the old embed message
-	botUser, _ := s.User("@me")
-	messages, err := s.ChannelMessages(partnersChannelID, 50, "", "", "")
-	if err == nil {
-		for _, msg := range messages {
-			if msg.Author != nil && msg.Author.ID == botUser.ID && len(msg.Embeds) > 0 {
-				_ = s.ChannelMessageDelete(partnersChannelID, msg.ID)
+	if i.Type == discordgo.InteractionApplicationCommand && i.ApplicationCommandData().Name == "delpartner" {
+		// ... (existing delpartner code) ...
+		hasRole := false
+		for _, r := range i.Member.Roles {
+			if r == addPartnerRoleID {
+				hasRole = true
 				break
 			}
 		}
+		if !hasRole {
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: "You do not have permission to use this command.",
+					Flags:   discordgo.MessageFlagsEphemeral,
+				},
+			})
+			return
+		}
+		partnerName := strings.TrimSpace(i.ApplicationCommandData().Options[0].StringValue())
+		found := false
+		for idx, p := range partners {
+			if strings.EqualFold(strings.TrimSpace(p.Name), partnerName) {
+				partners = append(partners[:idx], partners[idx+1:]...)
+				found = true
+				break
+			}
+		}
+		if !found {
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: "Partner not found.",
+					Flags:   discordgo.MessageFlagsEphemeral,
+				},
+			})
+			return
+		}
+		if err := savePartners(); err != nil {
+			log.Printf("Error saving partners: %v", err)
+		}
+		botUser, _ := s.User("@me")
+		messages, err := s.ChannelMessages(partnersChannelID, 50, "", "", "")
+		if err == nil {
+			for _, msg := range messages {
+				if msg.Author != nil && msg.Author.ID == botUser.ID && len(msg.Embeds) > 0 {
+					_ = s.ChannelMessageDelete(partnersChannelID, msg.ID)
+					break
+				}
+			}
+		}
+		sendPartnersEmbed(s)
+		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: "Partner deleted and embed refreshed.",
+				Flags:   discordgo.MessageFlagsEphemeral,
+			},
+		})
+		return
 	}
 
-	// Send the new embed
-	sendPartnersEmbed(s)
+	// --- Notification channel commands ---
+	if i.Type == discordgo.InteractionApplicationCommand && i.ApplicationCommandData().Name == "addnotificationchannel" {
+		opts := i.ApplicationCommandData().Options
+		name := opts[0].StringValue()
+		channelID := parseID(opts[1].StringValue())
+		roleID := parseID(opts[2].StringValue())
+		notificationRoleID := parseID(opts[3].StringValue())
+		for _, nc := range notificationChannels {
+			if strings.EqualFold(nc.Name, name) {
+				s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+					Type: discordgo.InteractionResponseChannelMessageWithSource,
+					Data: &discordgo.InteractionResponseData{
+						Content: "A notification channel with that name already exists.",
+						Flags:   discordgo.MessageFlagsEphemeral,
+					},
+				})
+				return
+			}
+		}
+		notificationChannels = append(notificationChannels, NotificationChannel{
+			Name: name, ChannelID: channelID, AccessRoleID: roleID, NotificationRoleID: notificationRoleID,
+		})
+		saveNotificationChannels()
+		sendNotificationsEmbed(s)
+		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: "Notification channel added.",
+				Flags:   discordgo.MessageFlagsEphemeral,
+			},
+		})
+		return
+	}
+	if i.Type == discordgo.InteractionApplicationCommand && i.ApplicationCommandData().Name == "delnotificationchannel" {
+		name := i.ApplicationCommandData().Options[0].StringValue()
+		found := false
+		for idx, nc := range notificationChannels {
+			if strings.EqualFold(nc.Name, name) {
+				notificationChannels = append(notificationChannels[:idx], notificationChannels[idx+1:]...)
+				found = true
+				break
+			}
+		}
+		if !found {
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: "Notification channel not found.",
+					Flags:   discordgo.MessageFlagsEphemeral,
+				},
+			})
+			return
+		}
+		saveNotificationChannels()
+		sendNotificationsEmbed(s)
+		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: "Notification channel deleted.",
+				Flags:   discordgo.MessageFlagsEphemeral,
+			},
+		})
+		return
+	}
 
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Content: "Partner deleted and embed refreshed.",
-			Flags:   discordgo.MessageFlagsEphemeral,
-		},
-	})
-	return
-}
+	// --- Notification button logic ---
+	if i.Type == discordgo.InteractionMessageComponent && strings.HasPrefix(i.MessageComponentData().CustomID, "notification_") &&
+		!strings.HasPrefix(i.MessageComponentData().CustomID, "notification_sub_") {
 
-	// Handle partner button presses
+		name := strings.TrimPrefix(i.MessageComponentData().CustomID, "notification_")
+		var nc *NotificationChannel
+		for idx, n := range notificationChannels {
+			if n.Name == name {
+				nc = &notificationChannels[idx]
+				break
+			}
+		}
+		if nc == nil {
+			return
+		}
+
+		embed := &discordgo.MessageEmbed{
+			Title:       "Notification Subscription",
+			Description: fmt.Sprintf("How would you like to subscribe to %s?", nc.Name),
+		}
+
+		components := []discordgo.MessageComponent{
+			discordgo.ActionsRow{
+				Components: []discordgo.MessageComponent{
+					discordgo.Button{
+						Label:    "Subscribe with Notifications",
+						CustomID: "notification_sub_with_" + nc.Name,
+						Style:    discordgo.SuccessButton,
+						Emoji:    &discordgo.ComponentEmoji{Name: "🔔"},
+					},
+					discordgo.Button{
+						Label:    "Subscribe without Notifications",
+						CustomID: "notification_sub_without_" + nc.Name,
+						Style:    discordgo.SecondaryButton,
+						Emoji:    &discordgo.ComponentEmoji{Name: "🔕"},
+					},
+				},
+			},
+		}
+
+		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Embeds:     []*discordgo.MessageEmbed{embed},
+				Flags:      discordgo.MessageFlagsEphemeral,
+				Components: components,
+			},
+		})
+		return
+	}
+
+	if i.Type == discordgo.InteractionMessageComponent && strings.HasPrefix(i.MessageComponentData().CustomID, "notification_sub_") {
+		// notification_sub_with_{name} or notification_sub_without_{name}
+		customID := i.MessageComponentData().CustomID
+		var withNotifs bool
+		var name string
+		if strings.HasPrefix(customID, "notification_sub_with_") {
+			withNotifs = true
+			name = strings.TrimPrefix(customID, "notification_sub_with_")
+		} else if strings.HasPrefix(customID, "notification_sub_without_") {
+			withNotifs = false
+			name = strings.TrimPrefix(customID, "notification_sub_without_")
+		} else {
+			return
+		}
+
+		var nc *NotificationChannel
+		for idx, n := range notificationChannels {
+			if n.Name == name {
+				nc = &notificationChannels[idx]
+				break
+			}
+		}
+		if nc == nil {
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: "Notification channel not found.",
+					Flags:   discordgo.MessageFlagsEphemeral,
+				},
+			})
+			return
+		}
+		if i.Member == nil {
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: "Error: Could not determine your Discord member info.",
+					Flags:   discordgo.MessageFlagsEphemeral,
+				},
+			})
+			return
+		}
+		userID := i.Member.User.ID
+		guildID := config.GuildID
+		var err1, err2 error
+		if withNotifs {
+			err1 = s.GuildMemberRoleAdd(guildID, userID, nc.AccessRoleID)
+			err2 = s.GuildMemberRoleAdd(guildID, userID, nc.NotificationRoleID)
+		} else {
+			err1 = s.GuildMemberRoleAdd(guildID, userID, nc.AccessRoleID)
+			err2 = s.GuildMemberRoleRemove(guildID, userID, nc.NotificationRoleID)
+		}
+		if err1 != nil || err2 != nil {
+			log.Printf("Role assignment error: %v %v", err1, err2)
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: "Failed to assign roles. Please contact an admin.",
+					Flags:   discordgo.MessageFlagsEphemeral,
+				},
+			})
+			return
+		}
+		emoji := "🔔"
+		mode := "with notifications"
+		if !withNotifs {
+			emoji = "🔕"
+			mode = "without notifications"
+		}
+		embed := &discordgo.MessageEmbed{
+			Title:       "Subscription Updated",
+			Description: fmt.Sprintf("%s You are now subscribed to %s %s.", emoji, nc.Name, mode),
+		}
+		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Embeds: []*discordgo.MessageEmbed{embed},
+				Flags:  discordgo.MessageFlagsEphemeral,
+			},
+		})
+		return
+	}
+
+	// --- Partner button logic (unchanged) ---
 	if i.Type == discordgo.InteractionMessageComponent && strings.HasPrefix(i.MessageComponentData().CustomID, "partner_") {
 		partnerName := strings.TrimPrefix(i.MessageComponentData().CustomID, "partner_")
 		var p *Partner

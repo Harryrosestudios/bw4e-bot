@@ -1,1 +1,26 @@
-[]
+[
+  {
+    "name": "Cosmos",
+    "description": "Cosmos is a distraction-free inspiration platform that lets creatives save, organise, and rediscover ideas from anywhere on the web. For filmmakers, Cosmos makes it easy to build mood boards, organize research, and collaborate on visual concepts without the noise of ads or social media. Its AI-powered tools help you quickly resurface and share inspiration, making creative workflows smoother and more focused.",
+    "offering": "As a member, you receive a free Cosmos Pro account, unlocking unlimited clusters, enhanced AI search, early access to new features, priority support, and advanced collaboration tools-empowering you to organise and share your creative vision at every stage of your industry projects.",
+    "logo_url": "https://cdn.cosmos.so/ae29c968-6db5-4597-965f-d7e250cde23d",
+    "link": "https://cosmos.so",
+    "emoji": "\u003c:cosmos:1365849431370371143\u003e"
+  },
+  {
+    "name": "Canva",
+    "description": "Canva is a powerful online design platform that empowers users to create stunning visuals, presentations, and social media content with ease. For creatives, Canva streamlines the process of designing posters, pitch decks, storyboards, and promotional materials-even without advanced design skills. Its collaborative tools and vast template library make it easy for teams to maintain a consistent, professional look across all projects.",
+    "offering": "As a member, you receive free access to Canva Pro through our non-profit plan. This unlocks unlimited premium images, videos, and templates, advanced brand kit features, real-time team collaboration, up to 100GB of cloud storage, and priority support-giving you all the tools needed to bring your creative vision to life at no cost to you.",
+    "logo_url": "https://freepnglogo.com/images/all_img/1691829322canva-app-logo-png.png",
+    "link": "https://www.canva.com/en_gb/",
+    "emoji": "\u003c:canva:1366041791668949133\u003e"
+  },
+  {
+    "name": "Affinity Suite",
+    "description": "The Affinity Suite is a professional-grade collection of design software - Affinity Photo, Designer, and Publisher - offering powerful tools for photo editing, graphic design, and publishing. For film and media creatives, Affinity enables you to craft high-impact visuals, posters, digital assets, and print layouts with precision and flexibility, all without the limitations of subscription fees. Its Adobe-like workflow ensures a smooth transition for creative teams.",
+    "offering": "Thanks to our Canva for Nonprofits partnership, members get the entire Affinity Suite for free. This includes lifetime access to Affinity Photo, Designer, and Publisher, letting you produce magazine-quality layouts, edit images, and create graphics for your film projects-without any cost or ongoing subscription.",
+    "logo_url": "https://cdn.worldvectorlogo.com/logos/affinity-1.svg",
+    "link": "https://affinity.serif.com/en-gb/",
+    "emoji": "\u003c:affinity:1366042880023724174\u003e"
+  }
+]
